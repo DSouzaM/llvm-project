@@ -95,6 +95,11 @@ New checks
   Finds member initializations in the constructor body which can be placed into
   the initialization list instead.
 
+- New :doc:`misc-library-upgrade-suggestion
+  <clang-tidy/checks/misc-library-upgrade-suggestion>` check.
+
+  FIXME: add release notes.
+
 New check aliases
 ^^^^^^^^^^^^^^^^^
 
