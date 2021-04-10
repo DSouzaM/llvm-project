@@ -10,6 +10,9 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include <map>
+#include <fstream>
+#include <sstream>
+#include <string>
 
 using namespace clang::ast_matchers;
 
@@ -17,32 +20,56 @@ namespace clang {
 namespace tidy {
 namespace misc {
 
+ChangeKind parseChangeKind(std::string kind) {
+  if (kind == "Removed_Field" || kind == "Renamed_Field" || kind == "Moved_Field") {
+    return FIELD;
+  } else if (kind == "Method") {
+    return METHOD;
+  }
+  return UNKNOWN;
+}
+
+void populateChanges(std::string ChangeFile, ChangeMap & Changes) {
+  std::ifstream InFile(ChangeFile);
+  assert(InFile.is_open() && "Changes file could not be opened");
+
+  std::string Line;
+  while (std::getline(InFile, Line)) {
+    std::vector<std::string> Cols;
+    std::istringstream Row(Line);
+
+    std::string Cell;
+    while (std::getline(Row, Cell, ',')) {
+      Cols.push_back(Cell);
+    }
+    if (!Row && Cell.empty()) { // empty last column
+        Cols.push_back("");
+    }
+
+    if (Cols.size() != 3) {
+      llvm::errs() << "Row contains " << Cols.size() << " columns instead of 3. Line is \"" << Line << "\"\n";
+      exit(1);
+    }
+    ChangeKind Kind = parseChangeKind(Cols[0]);
+    if (Kind == UNKNOWN) {
+      llvm::errs() << "Unknown change kind \"" << Cols[0] << "\"\n";
+      exit(1);
+    }
+    Changes.insert(std::make_pair(Cols[1], Change{Kind, Cols[1], Cols[2]}));
+  }
+}
+
 LibraryUpgradeSuggestionCheck::LibraryUpgradeSuggestionCheck(StringRef Name, ClangTidyContext *Context)
   : ClangTidyCheck(Name, Context) {
+    auto ChangeFileOption = Options.get("change_file");
+    assert(ChangeFileOption.hasValue() && "change_file option required");
+    ChangeFile = ChangeFileOption.getValue();
 
-    auto DBOption = Options.get("db");
-    auto UserOption = Options.get("user");
-    auto OldVersionOption = Options.get("old_version");
-    auto NewVersionOption = Options.get("new_version");
-    assert(DBOption.hasValue() && "db option required");
-    assert(UserOption.hasValue() && "user option required");
-    assert(OldVersionOption.hasValue() && "old_version option required");
-    assert(NewVersionOption.hasValue() && "new_version option required");
-    DB = DBOption.getValue();
-    User = UserOption.getValue();
-    OldVersion = OldVersionOption.getValue();
-    NewVersion = NewVersionOption.getValue();
-
-    // TODO: Contact DB and obtain changes
-    Changes.insert(std::make_pair("clang::CFGBlock::getTerminator", Change{METHOD, "clang::CFGBlock::getTerminator"}));
-    Changes.insert(std::make_pair("clang::immutability::Values::maybeFields", Change{FIELD, "clang::immutability::Values::maybeFields"}));
+    populateChanges(ChangeFile, Changes);
 }
 
 void LibraryUpgradeSuggestionCheck::storeOptions(ClangTidyOptions::OptionMap &Opts) {
-    Options.store(Opts, "db", DB);
-    Options.store(Opts, "user", User);
-    Options.store(Opts, "old_version", OldVersion);
-    Options.store(Opts, "new_version", NewVersion);
+    Options.store(Opts, "change_file", ChangeFile);
   }
 
 
@@ -88,7 +115,18 @@ void LibraryUpgradeSuggestionCheck::registerMatchers(MatchFinder *Finder) {
 void LibraryUpgradeSuggestionCheck::check(const MatchFinder::MatchResult &Result) {
   const auto *MatchedMember = Result.Nodes.getNodeAs<MemberExpr>("member");
 
-  diag(MatchedMember->getMemberLoc(), "found a problem: " + MatchedMember->getMemberDecl()->getName().str());
+  auto d = diag(MatchedMember->getMemberLoc(), "Found a problem: " + MatchedMember->getMemberDecl()->getName().str());
+  std::string name = MatchedMember->getMemberDecl()->getQualifiedNameAsString();
+
+  auto it = Changes.find(name);
+  if (it == Changes.end()) {
+    llvm::dbgs() << "Name \"" << name << "\" doesn't match a registered change.\n";
+    return;
+  }
+  Change change = it->second;
+  if (change.fix != "") {
+      d << FixItHint::CreateReplacement(MatchedMember->getSourceRange(), change.fix);
+  }
 }
 
 } // namespace misc

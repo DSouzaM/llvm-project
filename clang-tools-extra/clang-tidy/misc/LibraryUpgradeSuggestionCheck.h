@@ -22,21 +22,21 @@ namespace misc {
 
 enum ChangeKind {
   FIELD,
-  METHOD
+  METHOD,
+  UNKNOWN
 };
 
 struct Change {
   ChangeKind kind;
   std::string name;
-  // For now, we'll just report breaking changes (and worry about suggesting upgrades after)
+  std::string fix;
 };
 
+typedef std::map<std::string, Change> ChangeMap;
+
 class LibraryUpgradeSuggestionCheck : public ClangTidyCheck {
-  std::string DB;
-  std::string User;
-  std::string OldVersion;
-  std::string NewVersion;
-  std::map<std::string, Change> Changes;
+  std::string ChangeFile;
+  ChangeMap Changes;
 public:
   LibraryUpgradeSuggestionCheck(StringRef Name, ClangTidyContext *Context);
   void storeOptions(ClangTidyOptions::OptionMap &Opts) override;
