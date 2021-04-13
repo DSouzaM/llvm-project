@@ -77,45 +77,25 @@ void LibraryUpgradeSuggestionCheck::registerMatchers(MatchFinder *Finder) {
   /*
   To find usages of a declaration which changes between versions, we look for a
   MemberExpr which refers to that declaration.
-
-  To match a namespaced decl like clang::immutability::Values::maybeFields, we
-  match on a decl called maybeFields which has a declaration context of
-  clang::immutability::Values. This, recursively, can be matched by finding a
-  decl called Values with a declaration context clang::immutability (and so on).
-  For example, the final matcher might look like:
-
-  Finder->addMatcher(
-    memberExpr(hasDeclaration(
-      namedDecl(hasName("maybeFields"), hasDeclContext(
-        namedDecl(hasName("Values"), hasDeclContext(
-          namedDecl(hasName("immutability"), hasDeclContext(
-            namedDecl(hasName("clang")))))))))).bind("member"),
-    this
-  );
   */
 
   for (auto & pair: Changes) {
-    std::size_t start = 0, end;
-    clang::ast_matchers::internal::Matcher<Decl> matcher = anything();
-    std::string part;
-    // Split name "a::b::c::d" by "::" and construct the matcher from the inside out
-    // (as shown above).
-    while ((end = pair.first.find("::", start)) != std::string::npos) {
-      part = pair.first.substr(start, end - start);
-      matcher = namedDecl(hasName(part), hasDeclContext(std::move(matcher)));
-      start = end + 2;
-    }
-    part = pair.first.substr(start);
-    matcher = namedDecl(hasName(part), hasDeclContext(std::move(matcher)));
-
-    Finder->addMatcher(memberExpr(hasDeclaration(std::move(matcher))).bind("member"), this);
+    Finder->addMatcher(memberExpr(hasDeclaration(namedDecl(hasName(pair.second.name)))).bind("member"), this);
   }
+}
+
+SourceLocation getNearestLocation(const MemberExpr * expr) {
+  SourceLocation result = expr->getExprLoc();
+  if (result.isInvalid()) {
+    result = expr->getBase()->getExprLoc();
+  }
+  return result;
 }
 
 void LibraryUpgradeSuggestionCheck::check(const MatchFinder::MatchResult &Result) {
   const auto *MatchedMember = Result.Nodes.getNodeAs<MemberExpr>("member");
 
-  auto d = diag(MatchedMember->getMemberLoc(), "Found a problem: " + MatchedMember->getMemberDecl()->getName().str());
+  auto d = diag(getNearestLocation(MatchedMember), "Reference to member will break: " + MatchedMember->getMemberDecl()->getQualifiedNameAsString());
   std::string name = MatchedMember->getMemberDecl()->getQualifiedNameAsString();
 
   auto it = Changes.find(name);
